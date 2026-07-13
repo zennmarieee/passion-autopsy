@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import html2canvas from "html2canvas";
 
 interface AutopsyReport {
   cause_of_death: string;
@@ -33,6 +34,9 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<AutopsyReport | null>(null);
   const [caseNo] = useState(caseNumber());
+  const [downloading, setDownloading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const reportRef = useRef<HTMLDivElement>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -75,6 +79,90 @@ export default function Home() {
     setTimeframe("");
     setContext("");
     setError(null);
+  }
+
+async function downloadImage() {
+    if (!reportRef.current || !report) return;
+    setDownloading(true);
+    try {
+      const sourceNode = reportRef.current;
+      const canvas = await html2canvas(sourceNode, {
+        backgroundColor: "#f2ede3",
+        scale: 2,
+        useCORS: true,
+        onclone: (clonedDoc, clonedElement) => {
+          const originalEls = sourceNode.querySelectorAll<HTMLElement>("*");
+          const clonedEls = clonedElement.querySelectorAll<HTMLElement>("*");
+
+          const applyResolvedColors = (src: HTMLElement, dst: HTMLElement) => {
+            const cs = window.getComputedStyle(src);
+            dst.style.color = cs.color;
+            dst.style.backgroundColor = cs.backgroundColor;
+            dst.style.borderColor = cs.borderColor;
+            dst.style.borderTopColor = cs.borderTopColor;
+            dst.style.borderBottomColor = cs.borderBottomColor;
+            dst.style.borderLeftColor = cs.borderLeftColor;
+            dst.style.borderRightColor = cs.borderRightColor;
+
+            // The card and the "Case Closed" stamp use CSS animations that
+            // start at opacity: 0. html2canvas clones the DOM into a fresh
+            // element, which restarts those animations from their initial
+            // keyframe — and it rasterizes before the animation finishes,
+            // capturing the near-invisible starting state. Force the
+            // animation off and opacity to its finished value.
+            dst.style.animation = "none";
+            dst.style.transition = "none";
+            dst.style.opacity = "1";
+          };
+
+          applyResolvedColors(sourceNode, clonedElement);
+          originalEls.forEach((el, i) => {
+            const clone = clonedEls[i];
+            if (clone) applyResolvedColors(el, clone);
+          });
+        },
+      });
+      const dataUrl = canvas.toDataURL("image/png");
+      const link = document.createElement("a");
+      const safeName = passion.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40) || "case";
+      link.download = `passion-autopsy-${safeName}-${caseNo}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      console.error("Failed to generate image:", err);
+      setError("Couldn't generate the image. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function copyAsText() {
+    if (!report) return;
+    const text = [
+      `THE PASSION AUTOPSY — CASE NO. ${caseNo}`,
+      `Subject: ${passion}`,
+      ``,
+      `Cause of Death: ${report.cause_of_death}`,
+      `Time of Death: ${report.time_of_death}`,
+      ``,
+      `Contributing Factors:`,
+      ...report.contributing_factors.map((f) => `- ${f}`),
+      ``,
+      `Examiner's Notes: ${report.autopsy_notes}`,
+      ``,
+      `Resurrection Possibility: ${report.resurrection_possibility}`,
+      ``,
+      `"${report.case_closing_statement}"`,
+    ].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+      setError("Couldn't copy to clipboard.");
+    }
   }
 
   return (
@@ -149,26 +237,29 @@ export default function Home() {
       )}
 
       {report && (
-        <div className="relative bg-paper border border-ink/20 shadow-md rounded-sm p-6 sm:p-10 fade-up">
+        <div
+          ref={reportRef}
+          className="relative bg-paper border border-hairline shadow-md rounded-sm p-6 sm:p-10 fade-up"
+        >
           <div className="absolute -top-4 -right-3 sm:-top-5 sm:-right-5 stamp-animate">
-            <div className="border-4 border-stamp text-stamp font-mono font-bold uppercase text-sm sm:text-base px-3 py-1 rotate-[-8deg] opacity-90">
+            <div className="border-4 border-stamp text-stamp font-mono font-bold uppercase text-sm sm:text-base px-3 py-1 rotate-[-8deg]">
               Case Closed
             </div>
           </div>
 
-          <div className="flex justify-between items-baseline mb-6 border-b border-ink/20 pb-3">
-            <span className="font-mono text-xs text-ink/50">
+          <div className="flex justify-between items-baseline mb-6 border-b border-hairline pb-3">
+            <span className="font-mono text-xs text-inkFaint">
               CASE NO. {caseNo}
             </span>
-            <span className="font-mono text-xs text-ink/50 uppercase">
+            <span className="font-mono text-xs text-inkFaint uppercase">
               Office of Abandoned Passions
             </span>
           </div>
 
-          <h2 className="font-serif text-xl sm:text-2xl font-bold mb-1">
+          <h2 className="font-serif text-xl sm:text-2xl font-bold mb-1 text-ink">
             Subject: {passion}
           </h2>
-          <p className="font-mono text-xs text-ink/50 mb-6 uppercase tracking-wide">
+          <p className="font-mono text-xs text-inkFaint mb-6 uppercase tracking-wide">
             Autopsy Report
           </p>
 
@@ -176,10 +267,10 @@ export default function Home() {
           <Section label="Time of Death" value={report.time_of_death} />
 
           <div className="mb-5">
-            <p className="text-xs uppercase tracking-wider text-ink/50 mb-1 font-mono">
+            <p className="text-xs uppercase tracking-wider text-inkFaint mb-1 font-mono">
               Contributing Factors
             </p>
-            <ul className="list-disc list-inside space-y-1 font-serif text-ink/90">
+            <ul className="list-disc list-inside space-y-1 font-serif text-inkStrong">
               {report.contributing_factors?.map((f, i) => (
                 <li key={i}>{f}</li>
               ))}
@@ -187,32 +278,49 @@ export default function Home() {
           </div>
 
           <div className="mb-5">
-            <p className="text-xs uppercase tracking-wider text-ink/50 mb-1 font-mono">
+            <p className="text-xs uppercase tracking-wider text-inkFaint mb-1 font-mono">
               Examiner&apos;s Notes
             </p>
-            <p className="font-serif text-ink/90 leading-relaxed">
+            <p className="font-serif text-inkStrong leading-relaxed">
               {report.autopsy_notes}
             </p>
           </div>
 
           <div className="mb-5">
-            <p className="text-xs uppercase tracking-wider text-ink/50 mb-1 font-mono">
+            <p className="text-xs uppercase tracking-wider text-inkFaint mb-1 font-mono">
               Resurrection Possibility
             </p>
-            <p className="font-serif text-ink/90 leading-relaxed">
+            <p className="font-serif text-inkStrong leading-relaxed">
               {report.resurrection_possibility}
             </p>
           </div>
 
-          <div className="mt-8 pt-4 border-t border-ink/20 text-center">
-            <p className="font-serif italic text-ink/70">
+          <div className="mt-8 pt-4 border-t border-hairline text-center">
+            <p className="font-serif italic text-inkSoft">
               &ldquo;{report.case_closing_statement}&rdquo;
             </p>
           </div>
+        </div>
+      )}
 
+      {report && (
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <button
+            onClick={downloadImage}
+            disabled={downloading}
+            className="bg-ink text-paper font-serif tracking-wide py-3 rounded-sm hover:bg-ink/90 disabled:opacity-60 transition"
+          >
+            {downloading ? "Preparing image..." : "Download as Image"}
+          </button>
+          <button
+            onClick={copyAsText}
+            className="bg-ink/5 hover:bg-ink/10 border border-ink/20 text-ink font-serif tracking-wide py-3 rounded-sm transition"
+          >
+            {copied ? "Copied!" : "Copy as Text"}
+          </button>
           <button
             onClick={reset}
-            className="mt-8 w-full bg-ink/5 hover:bg-ink/10 border border-ink/20 text-ink font-serif tracking-wide py-3 rounded-sm transition"
+            className="bg-ink/5 hover:bg-ink/10 border border-ink/20 text-ink font-serif tracking-wide py-3 rounded-sm transition"
           >
             Open a New Case
           </button>
@@ -225,10 +333,10 @@ export default function Home() {
 function Section({ label, value }: { label: string; value: string }) {
   return (
     <div className="mb-5">
-      <p className="text-xs uppercase tracking-wider text-ink/50 mb-1 font-mono">
+      <p className="text-xs uppercase tracking-wider text-inkFaint mb-1 font-mono">
         {label}
       </p>
-      <p className="font-serif text-ink/90">{value}</p>
+      <p className="font-serif text-inkStrong">{value}</p>
     </div>
   );
 }
