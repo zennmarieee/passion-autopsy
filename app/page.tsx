@@ -1,8 +1,15 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import html2canvas from "html2canvas";
 import type { AutopsyReport, CaseStatus } from "@/lib/types";
+import {
+  getHistory,
+  addHistoryEntry,
+  removeHistoryEntry,
+  clearHistory,
+  type HistoryEntry,
+} from "@/lib/history";
 
 const LOADING_MESSAGES = [
   "Opening the case file...",
@@ -40,11 +47,17 @@ export default function Home() {
   const [loadingMsg, setLoadingMsg] = useState(LOADING_MESSAGES[0]);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<AutopsyReport | null>(null);
-  const [caseNo] = useState(caseNumber());
-  const [caseDate] = useState(filedDate());
+  const [caseNo, setCaseNo] = useState("");
+  const [caseDate, setCaseDate] = useState("");
   const [downloading, setDownloading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const reportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setHistory(getHistory());
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -71,7 +84,19 @@ export default function Home() {
       if (!res.ok) {
         setError(data.error || "Something went wrong.");
       } else {
+        const newCaseNo = caseNumber();
+        const newCaseDate = filedDate();
+        setCaseNo(newCaseNo);
+        setCaseDate(newCaseDate);
         setReport(data.report);
+
+        const entry: HistoryEntry = {
+          id: newCaseNo,
+          passion,
+          caseDate: newCaseDate,
+          report: data.report,
+        };
+        setHistory(addHistoryEntry(entry));
       }
     } catch (err) {
       setError("Couldn't reach the server. Please try again.");
@@ -87,6 +112,28 @@ export default function Home() {
     setTimeframe("");
     setContext("");
     setError(null);
+    setShowHistory(false);
+  }
+
+  function loadHistoryEntry(entry: HistoryEntry) {
+    setPassion(entry.passion);
+    setCaseNo(entry.id);
+    setCaseDate(entry.caseDate);
+    setReport(entry.report);
+    setTimeframe("");
+    setContext("");
+    setError(null);
+    setShowHistory(false);
+  }
+
+  function deleteHistoryEntry(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setHistory(removeHistoryEntry(id));
+  }
+
+  function handleClearHistory() {
+    clearHistory();
+    setHistory([]);
   }
 
   async function downloadImage() {
@@ -125,12 +172,7 @@ export default function Home() {
       });
       const dataUrl = canvas.toDataURL("image/png");
       const link = document.createElement("a");
-      const safeName =
-        passion
-          .trim()
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .slice(0, 40) || "case";
+      const safeName = passion.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40) || "case";
       link.download = `passion-autopsy-${safeName}-${caseNo}.png`;
       link.href = dataUrl;
       link.click();
@@ -190,7 +232,55 @@ export default function Home() {
         </p>
       </header>
 
-      {!report && (
+      {history.length > 0 && (
+        <div className="text-center mb-6">
+          <button
+            onClick={() => setShowHistory((s) => !s)}
+            className="text-xs uppercase tracking-wider text-ink/50 underline underline-offset-2 font-mono hover:text-ink/70 transition"
+          >
+            {showHistory ? "Hide Past Cases" : `View Past Cases (${history.length})`}
+          </button>
+        </div>
+      )}
+
+      {showHistory && (
+        <div className="bg-manila/60 border border-ink/15 rounded-sm shadow-sm p-4 sm:p-6 mb-8 space-y-2">
+          <p className="text-xs text-ink/40 font-serif italic mb-3">
+            Saved locally in your browser only — never sent anywhere. You can remove any case, or clear all of them.
+          </p>
+          {history.map((entry) => (
+            <div
+              key={entry.id}
+              onClick={() => loadHistoryEntry(entry)}
+              className="flex items-center justify-between bg-paper border border-ink/15 rounded-sm px-3 py-2 cursor-pointer hover:border-ink/40 transition"
+            >
+              <div className="min-w-0">
+                <p className="font-serif text-ink text-sm truncate">{entry.passion}</p>
+                <p className="font-mono text-[10px] text-ink/40 uppercase tracking-wider">
+                  {entry.id} &middot; {entry.report.status} &middot; {entry.caseDate}
+                </p>
+              </div>
+              <button
+                onClick={(e) => deleteHistoryEntry(entry.id, e)}
+                aria-label="Remove this case"
+                className="ml-3 shrink-0 text-ink/40 hover:text-stamp font-mono text-xs px-2 py-1 transition"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <div className="pt-2 text-center">
+            <button
+              onClick={handleClearHistory}
+              className="text-xs uppercase tracking-wider text-stamp underline underline-offset-2 font-mono"
+            >
+              Clear All History
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!report && !showHistory && (
         <form
           onSubmit={handleSubmit}
           className="bg-manila/60 border border-ink/15 rounded-sm shadow-sm p-6 sm:p-8 space-y-5"
@@ -224,8 +314,7 @@ export default function Home() {
 
           <div>
             <label className="block text-xs uppercase tracking-wider text-ink/60 mb-1">
-              Evidence for the case file{" "}
-              <span className="text-ink/40">(optional)</span>
+              Evidence for the case file <span className="text-ink/40">(optional)</span>
             </label>
             <textarea
               value={context}
@@ -237,7 +326,9 @@ export default function Home() {
             />
           </div>
 
-          {error && <p className="text-stamp text-sm font-serif">{error}</p>}
+          {error && (
+            <p className="text-stamp text-sm font-serif">{error}</p>
+          )}
 
           <button
             type="submit"
@@ -266,37 +357,27 @@ export default function Home() {
 
           <div className="grid grid-cols-2 gap-x-4 gap-y-2 mb-6 border-b border-hairline pb-4 font-mono text-xs text-inkFaint">
             <div>
-              <span className="block uppercase tracking-wider text-[10px] mb-0.5">
-                Case No.
-              </span>
+              <span className="block uppercase tracking-wider text-[10px] mb-0.5">Case No.</span>
               {caseNo}
             </div>
             <div>
-              <span className="block uppercase tracking-wider text-[10px] mb-0.5">
-                Status
-              </span>
+              <span className="block uppercase tracking-wider text-[10px] mb-0.5">Status</span>
               <span
-                className={`inline-block border-2 px-3 py-2 font-bold uppercase text-[11px] tracking-wider leading-none mt-1 ${STATUS_STYLES[report.status]}`}
+                className={`inline-block border-2 px-3 py-1 font-bold uppercase text-[11px] tracking-wider leading-none mt-1 ${STATUS_STYLES[report.status]}`}
               >
                 {report.status}
               </span>
             </div>
             <div>
-              <span className="block uppercase tracking-wider text-[10px] mb-0.5">
-                Patient
-              </span>
+              <span className="block uppercase tracking-wider text-[10px] mb-0.5">Patient</span>
               {passion}
             </div>
             <div>
-              <span className="block uppercase tracking-wider text-[10px] mb-0.5">
-                Filed By
-              </span>
+              <span className="block uppercase tracking-wider text-[10px] mb-0.5">Filed By</span>
               Chief Examiner, Dept. of Lost Passions
             </div>
             <div>
-              <span className="block uppercase tracking-wider text-[10px] mb-0.5">
-                Date
-              </span>
+              <span className="block uppercase tracking-wider text-[10px] mb-0.5">Date</span>
               {caseDate}
             </div>
           </div>
@@ -309,9 +390,7 @@ export default function Home() {
             <p className="text-xs uppercase tracking-wider text-stamp mb-1 font-mono font-bold">
               Cause of Death
             </p>
-            <p className="font-serif text-inkStrong text-lg">
-              {report.cause_of_death}
-            </p>
+            <p className="font-serif text-inkStrong text-lg">{report.cause_of_death}</p>
           </div>
 
           <Section label="Time of Death" value={report.time_of_death} />
