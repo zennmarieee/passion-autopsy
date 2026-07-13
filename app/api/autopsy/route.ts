@@ -1,43 +1,61 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildPrompt } from "@/lib/prompt";
+import { isValidAutopsyReport } from "@/lib/types";
 
 // Adjust the model name if you have access to a different Gemini model.
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
-interface AutopsyReport {
-  cause_of_death: string;
-  time_of_death: string;
-  contributing_factors: string[];
-  autopsy_notes: string;
-  resurrection_possibility: string;
-  case_closing_statement: string;
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+const RATE_LIMIT_MAX_REQUESTS = 5;
+const requestLog = new Map<string, number[]>();
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const timestamps = (requestLog.get(ip) || []).filter(
+    (t) => now - t < RATE_LIMIT_WINDOW_MS
+  );
+  timestamps.push(now);
+  requestLog.set(ip, timestamps);
+  return timestamps.length > RATE_LIMIT_MAX_REQUESTS;
 }
 
-function buildPrompt(passion: string, timeframe: string, context: string) {
-  return `You are a compassionate forensic examiner writing an "autopsy report" for an abandoned passion or hobby — this is a metaphor, not a real death. Never be mocking, generic, or clinical-cold. Be warm, specific, and a little wry, like a thoughtful friend who happens to write like a case file.
-
-Passion in question: "${passion}"
-Roughly when it faded: "${timeframe}"
-Additional context from the person (may be empty): "${context || "none provided"}"
-
-Write a JSON object with exactly these keys:
-- "cause_of_death": a short, punchy phrase (5-10 words) naming the most likely cause, written like an official cause-of-death line but insightful and specific to what was described.
-- "time_of_death": a short phrase restating when it likely faded, in report style (e.g. "Approximately early 2022, though signs of decline appeared months prior.").
-- "contributing_factors": an array of exactly 3 short bullet-style factors (each under 15 words) that plausibly contributed, based on common patterns of why passions fade (time, identity shift, external pressure, comparison, burnout, life changes, etc.) — grounded in what the person shared.
-- "autopsy_notes": a paragraph (4-6 sentences) written in first-person-examiner voice, showing genuine insight into why passions like this one commonly fade, tying it back to what the person described. Avoid generic self-help language.
-- "resurrection_possibility": a short paragraph (2-4 sentences) honestly assessing whether and how this could realistically be revived — not falsely optimistic, not dismissive.
-- "case_closing_statement": a single, poignant closing sentence, the kind that would stick with someone after reading the report.
-
-Return ONLY valid JSON with no markdown fences, no preamble, and no trailing commentary.`;
+function getClientIp(req: NextRequest): string {
+  const forwarded = req.headers.get("x-forwarded-for");
+  return forwarded ? forwarded.split(",")[0].trim() : "unknown";
 }
+
+const MAX_FIELD_LENGTH = 300;
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = getClientIp(req);
+    if (isRateLimited(ip)) {
+      return NextResponse.json(
+        {
+          error:
+            "The examiner's office is busy right now — please wait a few minutes before opening another case.",
+        },
+        { status: 429 }
+      );
+    }
+
     const { passion, timeframe, context } = await req.json();
 
     if (!passion || typeof passion !== "string") {
       return NextResponse.json(
         { error: "Please describe the passion you used to have." },
+        { status: 400 }
+      );
+    }
+
+    if (
+      passion.length > MAX_FIELD_LENGTH ||
+      (timeframe && timeframe.length > MAX_FIELD_LENGTH) ||
+      (context && context.length > MAX_FIELD_LENGTH)
+    ) {
+      return NextResponse.json(
+        { error: `Please keep each field under ${MAX_FIELD_LENGTH} characters.` },
         { status: 400 }
       );
     }
@@ -58,7 +76,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
-          temperature: 0.9,
+          temperature: 0.8,
           responseMimeType: "application/json",
         },
       }),
@@ -84,12 +102,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Defensive cleanup in case the model wraps the JSON in fences anyway.
     const cleaned = rawText.replace(/```json|```/g, "").trim();
 
-    let report: AutopsyReport;
+    let parsed: unknown;
     try {
-      report = JSON.parse(cleaned);
+      parsed = JSON.parse(cleaned);
     } catch (parseErr) {
       console.error("Failed to parse Gemini JSON:", cleaned);
       return NextResponse.json(
@@ -98,7 +115,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ report });
+    if (!isValidAutopsyReport(parsed)) {
+      console.error("Gemini response failed schema validation:", parsed);
+      return NextResponse.json(
+        { error: "The report came back incomplete. Please try again." },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ report: parsed });
   } catch (err) {
     console.error("Autopsy route error:", err);
     return NextResponse.json(
