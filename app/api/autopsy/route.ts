@@ -27,8 +27,35 @@ function getClientIp(req: NextRequest): string {
 
 const MAX_FIELD_LENGTH = 300;
 
+// --- Origin check -------------------------------------------------------
+// Prevents other websites from embedding a script that calls this endpoint
+// directly and quietly burning your Gemini quota (the browser's CORS
+// policy would block them from reading the response, but your server
+// would still process the request and pay for it). Not a hard security
+// boundary — a request without an Origin header (e.g. a direct script or
+// curl call) is allowed through, since browsers don't always send Origin
+// on same-origin requests either. It's a cheap deterrent, not a wall.
+function isAllowedOrigin(req: NextRequest): boolean {
+  const origin = req.headers.get("origin");
+  if (!origin) return true; // no Origin header — can't tell, allow it through
+  try {
+    const originHost = new URL(origin).host;
+    const requestHost = req.headers.get("host");
+    return originHost === requestHost;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
+    if (!isAllowedOrigin(req)) {
+      return NextResponse.json(
+        { error: "Requests from this origin are not allowed." },
+        { status: 403 }
+      );
+    }
+
     const ip = getClientIp(req);
     if (isRateLimited(ip)) {
       return NextResponse.json(
